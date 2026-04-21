@@ -1,0 +1,19 @@
+{
+  "algorithm": "astar",
+  "hybrid_mode": false,
+  "hybrid_threshold": 10,
+  "hybrid_early": "greedy",
+  "hybrid_late": "astar",
+  "fallback": "flood_fill",
+  "log_decisions": true,
+  "log_file": "logs/decisions.log",
+  "comparison_mode": false,
+  "flood_fill_limit": 120,
+  "display": {
+    "show_path": true,
+    "show_closed_set": true,
+    "fps_base": 6,
+    "fps_max": 14,
+    "fps_increment": 1
+  }
+}
