@@ -135,6 +135,8 @@ class Game:
         self.closed_vis = set()
         self.ls         = LiveState()
         self.tick_count = 0
+        # Track the last hybrid algorithm to detect switches
+        self._last_hybrid_alg = None
         self.panel_ren.reset_scroll()
         self.tracker.reset()
         self.cfg.load()   # re-read config on restart
@@ -169,21 +171,28 @@ class Game:
                 elif k == pygame.K_a:
                     self.ai_mode = not self.ai_mode
                     self.ai_path = []
-                    msg = f"🤖 AI ON — {self.cfg.algorithm}" if self.ai_mode else "🕹  AI OFF — Manual"
+                    msg = f"AI ON — {self.cfg.algorithm}" if self.ai_mode else "AI OFF — Manual"
                     self.ls.push_log(msg)
 
                 elif k == pygame.K_h:
                     self.cfg._data["hybrid_mode"] = not self.cfg.hybrid_mode
                     self.ls.push_log(
-                        f"🔀 Hybrid ON ({self.cfg.hybrid_early}→{self.cfg.hybrid_late})"
-                        if self.cfg.hybrid_mode else "🔀 Hybrid OFF"
+                        f"Hybrid ON ({self.cfg.hybrid_early}→{self.cfg.hybrid_late})"
+                        if self.cfg.hybrid_mode else "Hybrid OFF"
                     )
 
                 elif k in ALG_HOTKEYS:
                     alg = ALG_HOTKEYS[k]
                     self.cfg.set_algorithm(alg)
                     self.ai_path = []
-                    self.ls.push_log(f"⚡ Algorithm: {alg}")
+                    self.ls.push_log(f"Algorithm: {alg}")
+                    # Record the manual algorithm switch in history
+                    self.ls.record_algorithm_switch(
+                        algorithm=alg,
+                        tick=self.tick_count,
+                        score=self.score,
+                        reason="manual",
+                    )
 
                 elif k == pygame.K_TAB:
                     self.panel_ren.panel_tab = (self.panel_ren.panel_tab + 1) % 5
@@ -261,6 +270,20 @@ class Game:
         ms   = (time.perf_counter() - t0) * 1000
         self.snake.set_direction(pr.direction)
 
+        # ── Detect hybrid-driven algorithm switches ───────────────────────
+        # When hybrid mode is on, the planner may switch algorithms
+        # automatically based on score. Track this in history.
+        if self.cfg.hybrid_mode and alg != self._last_hybrid_alg:
+            if self._last_hybrid_alg is not None:
+                # This is a genuine hybrid switch
+                ls.record_algorithm_switch(
+                    algorithm=alg,
+                    tick=self.tick_count,
+                    score=self.score,
+                    reason="hybrid",
+                )
+            self._last_hybrid_alg = alg
+
         # ── Closed-set for visualisation (A* only, non-blocking) ─────────
         if alg == "astar" and not pr.used_fallback:
             self.closed_vis = self._astar_vis.get_closed_set_after(
@@ -302,12 +325,12 @@ class Game:
                 (abs(nx - hx) > 1) or (abs(ny - hy) > 1)
             )
             if ls.wrap_used:
-                ls.push_log("🌀 Portal wrap used!")
-            ls.push_log(f"✓ {alg}: {ls.path_len} steps")
+                ls.push_log("Portal wrap used!")
+            ls.push_log(f"{alg}: {ls.path_len} steps, {ls.nodes_explored} nodes")
         else:
             ls.next_cell = None
             self.ai_path = []
-            ls.push_log(f"⚠ {alg}: no path — fallback")
+            ls.push_log(f"{alg}: no path found — fallback active")
 
         # ── Tracker + Logger ─────────────────────────────────────────────
         self.tracker.record(
@@ -339,7 +362,7 @@ class Game:
 
         if self.snake.hits_self():
             self.game_over = True
-            self.ls.push_log("💀 GAME OVER — self collision!")
+            self.ls.push_log("GAME OVER — self collision!")
             self.logger.log_event(f"GAME_OVER score={self.score}")
             self.tracker.print_summary()
             return
@@ -351,29 +374,35 @@ class Game:
             self.ai_path    = []
             self.closed_vis = set()
             self.fps        = min(BASE_FPS + (self.score // 5) * FPS_INCREMENT, MAX_FPS)
-            self.ls.push_log(f"🍎 Ate food! Score = {self.score}")
+            self.ls.push_log(f"Food eaten! Score = {self.score}")
             self.logger.log_event(f"FOOD_EATEN score={self.score}")
 
         # ── Update LiveState ──────────────────────────────────────────────
-        ls           = self.ls
-        ls.mode      = f"AI: {self.cfg.algorithm}" if self.ai_mode else "MANUAL"
-        ls.algorithm = self.cfg.algorithm
-        ls.paused    = self.paused
-        ls.score     = self.score
-        ls.fps       = self.fps
-        ls.snake_len = self.snake.length
-        ls.head_pos  = self.snake.head
-        ls.food_pos  = self.food.position
-        ls.direction = DIR_NAMES.get(self.snake.direction, "?")
-        ls.dir_arrow = DIR_ARROW.get(self.snake.direction, "?")
-        ls.comparison_rows = self.tracker.panel_rows()
+        ls                   = self.ls
+        ls.mode              = f"AI: {self.cfg.algorithm}" if self.ai_mode else "MANUAL"
+        ls.algorithm         = self.cfg.algorithm
+        ls.paused            = self.paused
+        ls.score             = self.score
+        ls.fps               = self.fps
+        ls.snake_len         = self.snake.length
+        ls.head_pos          = self.snake.head
+        ls.food_pos          = self.food.position
+        ls.direction         = DIR_NAMES.get(self.snake.direction, "?")
+        ls.dir_arrow         = DIR_ARROW.get(self.snake.direction, "?")
+        ls.comparison_rows   = self.tracker.panel_rows()
+        ls.tick              = self.tick_count
+        # Sync hybrid state to LiveState for panel display
+        ls.hybrid_mode       = self.cfg.hybrid_mode
+        ls.hybrid_threshold  = self.cfg.hybrid_threshold
+        ls.hybrid_early      = self.cfg.hybrid_early
+        ls.hybrid_late       = self.cfg.hybrid_late
 
         if not self.ai_mode:
-            ls.path_found = False
-            ls.path_len   = 0
-            ls.fallback   = False
-            ls.wrap_used  = False
-            ls.next_cell  = None
+            ls.path_found  = False
+            ls.path_len    = 0
+            ls.fallback    = False
+            ls.wrap_used   = False
+            ls.next_cell   = None
             ls.active_rule = ""
 
     # ── Update (called each frame) ────────────────────────────────────────────

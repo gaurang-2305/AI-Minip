@@ -13,6 +13,15 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class AlgorithmSwitch:
+    """Records a single algorithm change event."""
+    algorithm: str
+    tick:      int
+    score:     int
+    reason:    str = "manual"   # "manual" | "hybrid"
+
+
+@dataclass
 class LiveState:
     """
     Flat record updated each game tick.
@@ -65,12 +74,41 @@ class LiveState:
     # ── Comparison stats (populated by ComparisonTracker) ───────────────────
     comparison_rows: list = field(default_factory=list)
 
+    # ── Algorithm switch history ─────────────────────────────────────────────
+    # Each entry is an AlgorithmSwitch dataclass recording when/why algo changed
+    algorithm_history: list = field(default_factory=list)
+
+    # ── Hybrid mode state ────────────────────────────────────────────────────
+    hybrid_mode:      bool = False
+    hybrid_threshold: int  = 10
+    hybrid_early:     str  = "greedy"
+    hybrid_late:      str  = "astar"
+
+    # ── Tick counter (for history display) ───────────────────────────────────
+    tick: int = 0
+
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def push_log(self, msg: str):
         self.log.append(msg)
         if len(self.log) > 12:
             self.log.pop(0)
+
+    def record_algorithm_switch(self, algorithm: str, tick: int, score: int,
+                                 reason: str = "manual"):
+        """
+        Record an algorithm change in history.
+        Only records if it's actually a different algorithm.
+        """
+        if (not self.algorithm_history or
+                self.algorithm_history[-1].algorithm != algorithm):
+            self.algorithm_history.append(
+                AlgorithmSwitch(algorithm=algorithm, tick=tick,
+                                score=score, reason=reason)
+            )
+            # Keep history bounded to last 20 entries
+            if len(self.algorithm_history) > 20:
+                self.algorithm_history.pop(0)
 
     def reset(self):
         """Reset to defaults (called on game restart)."""
